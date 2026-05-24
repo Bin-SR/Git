@@ -1,0 +1,78 @@
+﻿<!--
+  Franka Emika Panda + simple table scene for MuJoCo.
+  Requires mujoco_menagerie: pip install mujoco-menagerie
+
+  The Panda model is loaded from mujoco_menagerie''s franka_emika_panda/panda.xml.
+  This wrapper adds a floor, table, and workspace objects.
+-->
+<mujoco model="panda_scene">
+  <compiler angle="radian" meshdir="assets"/>
+
+  <option timestep="0.002" integrator="implicitfast">
+    <flag gravity="enable" contact="enable"/>
+  </option>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0.0 0.0 0.0"/>
+    <map force="0.1" stiffness="100"/>
+  </visual>
+
+  <!-- ============== Assets ============== -->
+  <asset>
+    <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 .15 .2"
+             width="512" height="512"/>
+    <material name="matplane" texture="texplane" texrepeat="1 1" texuniform="true" reflectance="0.1"/>
+    <material name="table_mat" rgba="0.6 0.5 0.4 1.0" specular="0.1" shininess="0.3"/>
+    <material name="red" rgba="0.9 0.2 0.2 1.0"/>
+    <material name="blue" rgba="0.2 0.4 0.9 1.0"/>
+    <material name="green" rgba="0.2 0.8 0.3 1.0"/>
+  </asset>
+
+  <!-- ============== World ============== -->
+  <worldbody>
+    <!-- Floor -->
+    <geom name="floor" type="plane" pos="0 0 0" size="2 2 0.1" material="matplane"/>
+
+    <!-- Ambient light -->
+    <light name="light" pos="0.5 0 1.5" dir="0 -0.5 -1" diffuse="0.8 0.8 0.8"/>
+
+    <!-- Table base -->
+    <body name="table" pos="0.5 0 0">
+      <geom name="table_top" type="box" pos="0 0 0.4" size="0.4 0.3 0.025" material="table_mat"/>
+      <geom name="table_leg1" type="cylinder" pos="-0.35 -0.25 0.2" size="0.02 0.2" rgba="0.5 0.35 0.25 1"/>
+      <geom name="table_leg2" type="cylinder" pos="-0.35  0.25 0.2" size="0.02 0.2" rgba="0.5 0.35 0.25 1"/>
+      <geom name="table_leg3" type="cylinder" pos=" 0.35 -0.25 0.2" size="0.02 0.2" rgba="0.5 0.35 0.25 1"/>
+      <geom name="table_leg4" type="cylinder" pos=" 0.35  0.25 0.2" size="0.02 0.2" rgba="0.5 0.35 0.25 1"/>
+    </body>
+
+    <!-- Objects on table for manipulation -->
+    <body name="cube_red" pos="0.5 0.0 0.425">
+      <freejoint/>
+      <geom name="cube_red_geom" type="box" size="0.025 0.025 0.025" material="red" mass="0.05"/>
+    </body>
+
+    <body name="cube_blue" pos="0.55 -0.1 0.425">
+      <freejoint/>
+      <geom name="cube_blue_geom" type="box" size="0.025 0.025 0.025" material="blue" mass="0.05"/>
+    </body>
+
+    <!-- ============== Panda Robot ============== -->
+    <!--
+      Include the Panda from mujoco_menagerie.
+      Install: pip install mujoco-menagerie
+      Path: site-packages/mujoco_menagerie/franka_emika_panda/panda.xml
+    -->
+    <include file="franka_emika_panda/panda.xml"/>
+
+  </worldbody>
+
+  <!-- ============== Actuator config for position servoing ============== -->
+  <!--
+    The Panda model already has actuators defined.
+    We add position actuators for all 7 joints + 2 fingers.
+    The default actuators are torque-controlled; we add position servos here.
+    To use position control, set gain prm via the actuator gain slider
+    in the sim or use ctrl directly.
+  -->
+
+</mujoco>

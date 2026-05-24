@@ -1,0 +1,24 @@
+﻿# MoveIt2 controller configuration for Panda + MuJoCo bridge.
+# The planning_bridge node implements FollowJointTrajectory action
+# at /follow_joint_trajectory.
+
+controller_names:
+  - panda_arm_controller
+
+panda_arm_controller:
+  type: FollowJointTrajectory
+  action_ns: follow_joint_trajectory
+  default: true
+  joints:
+    - panda_joint1
+    - panda_joint2
+    - panda_joint3
+    - panda_joint4
+    - panda_joint5
+    - panda_joint6
+    - panda_joint7
+
+# Joint state controller (provided by MuJoCo node)
+joint_state_controller:
+  type: joint_state_controller/JointStateController
+  publish_rate: 50
