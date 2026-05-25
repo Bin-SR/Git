@@ -1,11 +1,11 @@
 ﻿"""
 Launch file: Panda Robot - MuJoCo + MoveIt2 + RViz.
 
-Brings up the full stack:
-  1. MuJoCo physics simulation
+Brings up:
+  1. MuJoCo physics simulation (panda2.xml from mujoco_menagerie)
   2. Planning bridge (FollowJointTrajectory -> MuJoCo)
   3. robot_state_publisher (TF from URDF)
-  4. MoveIt2 move_group (motion planning server)
+  4. MoveIt2 move_group (motion planning)
   5. RViz2 with MotionPlanning panel
 
 Usage:
@@ -18,14 +18,8 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    LogInfo,
-    RegisterEventHandler,
-    TimerAction,
-)
+from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -38,15 +32,13 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # =========== Paths ===========
-    pkg_share = FindPackageShare("panda_mujoco_bringup")
-    panda_desc_share = FindPackageShare("moveit_resources_panda_description")
-    panda_moveit_share = FindPackageShare("moveit_resources_panda_moveit_config")
+    # =========== Resolve paths (evaluated at launch time) ===========
+    pkg_share = get_package_share_directory("panda_mujoco_bringup")
+    panda_desc_share = get_package_share_directory("moveit_resources_panda_description")
+    panda_moveit_share = get_package_share_directory("moveit_resources_panda_moveit_config")
 
     # URDF
-    urdf_path = PathJoinSubstitution([
-        panda_desc_share, "urdf", "panda.urdf.xacro"
-    ])
+    urdf_path = os.path.join(panda_desc_share, "urdf", "panda.urdf.xacro")
     robot_description_content = Command([
         FindExecutable(name="xacro"), " ", urdf_path,
         " hand:=true",
@@ -56,19 +48,21 @@ def generate_launch_description():
     )}
 
     # SRDF
-    srdf_path = PathJoinSubstitution([
-        panda_moveit_share, "config", "panda.srdf",
-    ])
+    srdf_path = os.path.join(panda_moveit_share, "config", "panda.srdf")
 
-    # Controller config
-    controllers_yaml = PathJoinSubstitution([
-        pkg_share, "config", "mujoco_controllers.yaml",
-    ])
+    # Controller config (plain string, not substitution -- needed for parameters list)
+    controllers_yaml = os.path.join(pkg_share, "config", "mujoco_controllers.yaml")
 
     # RViz config
-    rviz_config = PathJoinSubstitution([
-        panda_moveit_share, "config", "moveit.rviz",
-    ])
+    rviz_config = os.path.join(panda_moveit_share, "config", "moveit.rviz")
+
+    # Default MJCF path: prefer mujoco_menagerie (has mesh assets), fallback to pkg
+    try:
+        import mujoco_menagerie  # type: ignore
+        menagerie_dir = Path(mujoco_menagerie.__file__).parent
+        default_mjcf = str(menagerie_dir / "franka_emika_panda" / "panda2.xml")
+    except ImportError:
+        default_mjcf = os.path.join(pkg_share, "description", "panda2.xml")
 
     # =========== Launch arguments ===========
     headless_arg = DeclareLaunchArgument(
@@ -81,8 +75,8 @@ def generate_launch_description():
     )
     mjcf_path_arg = DeclareLaunchArgument(
         "mjcf_path",
-        default_value=PathJoinSubstitution([pkg_share, "description", "panda2.xml"]),
-        description="Path to MuJoCo scene XML"
+        default_value=default_mjcf,
+        description="Path to MuJoCo scene XML (panda2.xml)"
     )
 
     # =========== Nodes ===========
@@ -101,7 +95,7 @@ def generate_launch_description():
         }],
     )
 
-    # 2. Planning bridge (FollowJointTrajectory action server)
+    # 2. Planning bridge
     planning_bridge = Node(
         package="panda_mujoco_bringup",
         executable="planning_bridge",
@@ -143,6 +137,7 @@ def generate_launch_description():
             {"trajectory_execution.allowed_execution_duration_scaling": 2.0},
             {"trajectory_execution.allowed_goal_duration_margin": 0.5},
             {"trajectory_execution.allowed_start_tolerance": 0.01},
+            # Load controller names from YAML file
             controllers_yaml,
         ],
     )
