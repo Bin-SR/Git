@@ -24,45 +24,52 @@ from launch.substitutions import (
     Command,
     FindExecutable,
     LaunchConfiguration,
-    PathJoinSubstitution,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     # =========== Resolve paths (evaluated at launch time) ===========
     pkg_share = get_package_share_directory("panda_mujoco_bringup")
-    panda_desc_share = get_package_share_directory("moveit_resources_panda_description")
-    panda_moveit_share = get_package_share_directory("moveit_resources_panda_moveit_config")
+    panda_desc_share = get_package_share_directory(
+        "moveit_resources_panda_description"
+    )
+    panda_moveit_share = get_package_share_directory(
+        "moveit_resources_panda_moveit_config"
+    )
 
     # URDF
     urdf_path = os.path.join(panda_desc_share, "urdf", "panda.urdf.xacro")
     robot_description_content = Command([
-        FindExecutable(name="xacro"), " ", urdf_path,
-        " hand:=true",
+        FindExecutable(name="xacro"), " ", urdf_path, " hand:=true",
     ])
-    robot_description = {"robot_description": ParameterValue(
-        robot_description_content, value_type=str
-    )}
+    robot_description = {
+        "robot_description": ParameterValue(
+            robot_description_content, value_type=str
+        )
+    }
 
     # SRDF
     srdf_path = os.path.join(panda_moveit_share, "config", "panda.srdf")
 
-    # Controller config (plain string, not substitution -- needed for parameters list)
-    controllers_yaml = os.path.join(pkg_share, "config", "mujoco_controllers.yaml")
-
     # RViz config
     rviz_config = os.path.join(panda_moveit_share, "config", "moveit.rviz")
 
-    # Default MJCF path: prefer mujoco_menagerie (has mesh assets), fallback to pkg
+    # Default MJCF: prefer mujoco_menagerie (has mesh assets)
     try:
         import mujoco_menagerie  # type: ignore
         menagerie_dir = Path(mujoco_menagerie.__file__).parent
         default_mjcf = str(menagerie_dir / "franka_emika_panda" / "panda2.xml")
     except ImportError:
         default_mjcf = os.path.join(pkg_share, "description", "panda2.xml")
+
+    # Panda arm joint names (matching URDF)
+    PANDA_ARM_JOINTS = [
+        "panda_joint1", "panda_joint2", "panda_joint3",
+        "panda_joint4", "panda_joint5", "panda_joint6",
+        "panda_joint7",
+    ]
 
     # =========== Launch arguments ===========
     headless_arg = DeclareLaunchArgument(
@@ -112,7 +119,7 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
-    # 4. MoveIt2 move_group
+    # 4. MoveIt2 move_group (controllers INLINED, not loaded from YAML)
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
@@ -132,13 +139,19 @@ def generate_launch_description():
                 },
             }},
             {"use_sim_time": False},
-            {"moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager"},
+            # ---- Controller config (inlined to bypass file-loading issues) ----
+            {"moveit_controller_manager":
+                "moveit_simple_controller_manager/MoveItSimpleControllerManager"},
             {"moveit_manage_controllers": False},
+            {"controller_names": ["panda_arm_controller"]},
+            {"panda_arm_controller.type": "FollowJointTrajectory"},
+            {"panda_arm_controller.action_ns": "follow_joint_trajectory"},
+            {"panda_arm_controller.default": True},
+            {"panda_arm_controller.joints": PANDA_ARM_JOINTS},
+            # ---- Trajectory execution ----
             {"trajectory_execution.allowed_execution_duration_scaling": 2.0},
             {"trajectory_execution.allowed_goal_duration_margin": 0.5},
             {"trajectory_execution.allowed_start_tolerance": 0.01},
-            # Load controller names from YAML file
-            controllers_yaml,
         ],
     )
 
