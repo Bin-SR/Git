@@ -10,7 +10,7 @@ Brings up the full stack:
 
 Usage:
   ros2 launch panda_mujoco_bringup panda_mujoco.launch.py
-  ros2 launch panda_mujoco_bringup panda_mujoco.launch.py headless:=true  # no GUI
+  ros2 launch panda_mujoco_bringup panda_mujoco.launch.py headless:=true
 """
 
 import os
@@ -41,8 +41,9 @@ def generate_launch_description():
     # =========== Paths ===========
     pkg_share = FindPackageShare("panda_mujoco_bringup")
     panda_desc_share = FindPackageShare("moveit_resources_panda_description")
+    panda_moveit_share = FindPackageShare("moveit_resources_panda_moveit_config")
 
-    # Load the Panda URDF
+    # URDF
     urdf_path = PathJoinSubstitution([
         panda_desc_share, "urdf", "panda.urdf.xacro"
     ])
@@ -54,10 +55,9 @@ def generate_launch_description():
         robot_description_content, value_type=str
     )}
 
-    # SRDF path
+    # SRDF
     srdf_path = PathJoinSubstitution([
-        FindPackageShare("moveit_resources_panda_moveit_config"),
-        "config", "panda.srdf",
+        panda_moveit_share, "config", "panda.srdf",
     ])
 
     # Controller config
@@ -67,8 +67,7 @@ def generate_launch_description():
 
     # RViz config
     rviz_config = PathJoinSubstitution([
-        FindPackageShare("moveit_resources_panda_moveit_config"),
-        "config", "moveit.rviz",
+        panda_moveit_share, "config", "moveit.rviz",
     ])
 
     # =========== Launch arguments ===========
@@ -82,7 +81,7 @@ def generate_launch_description():
     )
     mjcf_path_arg = DeclareLaunchArgument(
         "mjcf_path",
-        default_value=PathJoinSubstitution([pkg_share, "description", "panda_scene.xml"]),
+        default_value=PathJoinSubstitution([pkg_share, "description", "panda2.xml"]),
         description="Path to MuJoCo scene XML"
     )
 
@@ -130,7 +129,14 @@ def generate_launch_description():
             {"robot_description_semantic": Command([
                 FindExecutable(name="xacro"), " ", srdf_path,
             ])},
-            {"robot_description_kinematics": {}},
+            {"robot_description_kinematics": {
+                "panda_arm": {
+                    "kinematics_solver": "kdl_kinematics_plugin/KDLKinematicsPlugin",
+                    "kinematics_solver_search_resolution": 0.005,
+                    "kinematics_solver_timeout": 0.005,
+                    "kinematics_solver_attempts": 3,
+                },
+            }},
             {"use_sim_time": False},
             {"moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager"},
             {"moveit_manage_controllers": False},
@@ -159,7 +165,6 @@ def generate_launch_description():
         mujoco_node,
         planning_bridge,
         robot_state_pub,
-        # Start MoveIt and RViz after a short delay
         TimerAction(
             period=3.0,
             actions=[move_group_node, rviz_node],
