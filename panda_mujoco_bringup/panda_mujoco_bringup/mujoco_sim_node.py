@@ -2,6 +2,11 @@
 
 Runs physics simulation, publishes joint states and TF transforms,
 and accepts joint position commands to drive the robot.
+
+IMPORTANT: panda2.xml uses <general> actuators with built-in position servos.
+  arm:  ctrl = target_joint_position (radians), actuator handles PD internally.
+  finger: ctrl = 0-255 (PWM-like), 255 = closed.
+This node writes target positions directly to data.ctrl -- NO extra P-controller.
 """
 
 import os
@@ -36,13 +41,14 @@ PANDA_FINGER_JOINTS = [
 
 PANDA_JOINT_NAMES = PANDA_ARM_JOINTS + PANDA_FINGER_JOINTS
 
-# MuJoCo joint names may differ from ROS names; map ROS -> MuJoCo where needed
+# MuJoCo joint names may differ from ROS names
 ROS_TO_MUJOCO_JOINT = {
     "panda_finger_joint1": "finger_joint1",
     "panda_finger_joint2": "finger_joint2",
 }
 
 NUM_ARM_JOINTS = 7
+FINGER_ACTUATOR_INDEX = 7  # actuator8 in panda2.xml
 
 
 class MujocoSimNode(Node):
@@ -89,7 +95,6 @@ class MujocoSimNode(Node):
             trn_type = self._model.actuator_trntype[act_idx]
             trn_id = self._model.actuator_trnid[act_idx, 0]
 
-            # Direct joint transmission (mjTRN_JOINT = 0, mjTRN_JOINTINPARENT = 1)
             if trn_type in (mujoco.mjtTrn.mjTRN_JOINT,
                             mujoco.mjtTrn.mjTRN_JOINTINPARENT):
                 jnt_name = mujoco.mj_id2name(
@@ -97,7 +102,6 @@ class MujocoSimNode(Node):
                 )
                 if jnt_name is None:
                     continue
-                # Reverse-map: MuJoCo joint name -> ROS joint name
                 ros_name = jnt_name
                 for k, v in ROS_TO_MUJOCO_JOINT.items():
                     if v == jnt_name:
@@ -106,7 +110,7 @@ class MujocoSimNode(Node):
                 if ros_name in PANDA_JOINT_NAMES:
                     self._ros_joint_to_actuator[ros_name] = act_idx
 
-        # Fallback: if finger joints are tendon-driven, map last actuator to fingers
+        # Fallback: tendon-driven finger joints bound to last actuator
         for finger in PANDA_FINGER_JOINTS:
             if finger not in self._ros_joint_to_actuator:
                 self._ros_joint_to_actuator[finger] = self._n_actuators - 1
@@ -114,25 +118,39 @@ class MujocoSimNode(Node):
         self._controlled_joints = list(self._ros_joint_to_actuator.keys())
         self.get_logger().info(f"Controlled joints: {self._controlled_joints}")
 
-        # --- Joint limits ---
-        self._joint_lower = np.zeros(self._n_actuators)
-        self._joint_upper = np.zeros(self._n_actuators)
-        for ros_name, act_idx in self._ros_joint_to_actuator.items():
-            mj_name = ROS_TO_MUJOCO_JOINT.get(ros_name, ros_name)
-            jid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, mj_name)
-            if jid >= 0:
-                qpos_idx = self._model.jnt_qposadr[jid]
-                self._joint_lower[act_idx] = self._model.jnt_range[jid, 0]
-                self._joint_upper[act_idx] = self._model.jnt_range[jid, 1]
+        # --- Actuator ctrlrange for clamping ---
+        self._ctrl_lower = np.full(self._n_actuators, -np.inf)
+        self._ctrl_upper = np.full(self._n_actuators, np.inf)
+        for i in range(self._n_actuators):
+            if self._model.actuator_ctrlrange[i, 0] > mujoco.mjMINVAL:
+                self._ctrl_lower[i] = self._model.actuator_ctrlrange[i, 0]
+                self._ctrl_upper[i] = self._model.actuator_ctrlrange[i, 1]
 
-        # Command buffer: initialise to current positions so controller starts at rest
+        # --- Command buffer (target positions) ---
         self._target_positions = np.zeros(self._n_actuators)
-        for ros_name, act_idx in self._ros_joint_to_actuator.items():
-            mj_name = ROS_TO_MUJOCO_JOINT.get(ros_name, ros_name)
-            jid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, mj_name)
-            if jid >= 0:
-                qpos_idx = self._model.jnt_qposadr[jid]
-                self._target_positions[act_idx] = float(self._data.qpos[qpos_idx])
+
+        # Initialise arm targets to current qpos (radians)
+        for ros_name in PANDA_ARM_JOINTS:
+            if ros_name in self._ros_joint_to_actuator:
+                act_idx = self._ros_joint_to_actuator[ros_name]
+                mj_name = ROS_TO_MUJOCO_JOINT.get(ros_name, ros_name)
+                jid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, mj_name)
+                if jid >= 0:
+                    qpos_idx = self._model.jnt_qposadr[jid]
+                    val = float(self._data.qpos[qpos_idx])
+                    self._target_positions[act_idx] = np.clip(
+                        val, self._ctrl_lower[act_idx], self._ctrl_upper[act_idx]
+                    )
+
+        # Finger: ctrl is 0-255 (PWM-like).  Initialise to keyframe value 255.
+        for ros_name in PANDA_FINGER_JOINTS:
+            if ros_name in self._ros_joint_to_actuator:
+                act_idx = self._ros_joint_to_actuator[ros_name]
+                self._target_positions[act_idx] = 255.0
+
+        self.get_logger().info(
+            f"Initial targets: {self._target_positions}"
+        )
 
         # --- Subscribers ---
         self._cmd_sub = self.create_subscription(
@@ -172,7 +190,7 @@ class MujocoSimNode(Node):
 
     # ------------------------------------------------------------------
     def _command_callback(self, msg: Float64MultiArray) -> None:
-        """Receive 7-element arm joint position commands."""
+        """Receive 7-element arm joint position commands (radians)."""
         cmd = np.array(msg.data, dtype=np.float64)
         if len(cmd) < NUM_ARM_JOINTS:
             self.get_logger().warn(
@@ -184,27 +202,21 @@ class MujocoSimNode(Node):
             if ros_name in self._ros_joint_to_actuator:
                 act_idx = self._ros_joint_to_actuator[ros_name]
                 clamped = np.clip(
-                    cmd[i], self._joint_lower[act_idx], self._joint_upper[act_idx]
+                    cmd[i], self._ctrl_lower[act_idx], self._ctrl_upper[act_idx]
                 )
                 self._target_positions[act_idx] = clamped
 
     # ------------------------------------------------------------------
     def _physics_step(self) -> None:
-        """Run one physics step with P-controller position servo."""
-        kp = 200.0
-        kd = 10.0
+        """One physics step.  Write target positions directly to ctrl.
 
+        panda2.xml <general> actuators have built-in PD servos:
+          arm: ctrl = target position (radians)
+          finger: ctrl = 0-255 (PWM)
+        No extra P-controller needed.
+        """
         for ros_name, act_idx in self._ros_joint_to_actuator.items():
-            mj_name = ROS_TO_MUJOCO_JOINT.get(ros_name, ros_name)
-            jid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, mj_name)
-            if jid < 0:
-                continue
-            qpos_idx = self._model.jnt_qposadr[jid]
-            qvel_idx = self._model.jnt_dofadr[jid]
-
-            pos_error = self._target_positions[act_idx] - self._data.qpos[qpos_idx]
-            vel = self._data.qvel[qvel_idx]
-            self._data.ctrl[act_idx] = kp * pos_error - kd * vel
+            self._data.ctrl[act_idx] = self._target_positions[act_idx]
 
         mujoco.mj_step(self._model, self._data)
 
